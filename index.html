@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0e0804">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cupping">
+<title>WCRC Cupping — Kitasaya Roastery</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{background:#0e0804;font-family:'Jost',system-ui,sans-serif;color:#d4b896;}
+  #root{min-height:100dvh;}
+  input,textarea,select,button{font-family:'Jost',sans-serif;outline:none;}
+  input[type=text],input[type=date],input[type=number],textarea,select{
+    background:#120b04;border:1.5px solid #2a1c0e;border-radius:12px;color:#d4b896;font-size:15px;padding:11px 14px;width:100%;}
+  input:focus,textarea:focus,select:focus{border-color:#c8923a;}
+  textarea{resize:none;}
+  ::placeholder{color:#4a3020;}
+  ::-webkit-scrollbar{width:0;height:0;}
+  .serif{font-family:'Cormorant Garamond',serif;}
+  button{cursor:pointer;border:none;background:none;color:inherit;}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .fade{animation:fade .2s ease;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+/* ── 定数 ── */
+const CATEGORIES = [
+  { key:'fragrance', label:'Fragrance / Aroma' },
+  { key:'flavor',    label:'Flavor' },
+  { key:'aftertaste',label:'Aftertaste' },
+  { key:'acidity',   label:'Acidity' },
+  { key:'sweetness', label:'Sweetness' },
+  { key:'mouthfeel', label:'Mouthfeel' },
+];
+const DESCRIPTORS = ['Floral','Berry','Dried Fruit','Citrus Fruit','Sour/Fermented',
+  'Green/Veg','Nutty/Cocoa','Spicy','Sweet','Vanilla','Brown Sugar',
+  'Roasted','Chemical','Musty/Earthy','Papery','Other'];
+const MAIN_TASTES = ['Salty','Bitter','Sour','Umami','Sweet'];
+const MOUTHFEEL_TEX = ['Smooth','Velvety','Silky','Syrupy','Rough','Chalky','Mouth-Drying','Oily','Metallic'];
+const ACIDITY_TYPE = ['Dry Acidity (Herby/Grassy/Tart)','Sweet Acidity (Juicy/Fruit-like/Bright)'];
+const DEFECTS = [
+  { key:'under', label:'Underdevelopment' },
+  { key:'over',  label:'Overdevelopment' },
+  { key:'baked', label:'Baked' },
+  { key:'scorched', label:'Scorched' },
+];
+const DEFECT_SCALE = [0,1,3,5];
+const SWEETNESS_DEV = [
+  {k:'grainy',s:'Grainy'},{k:'g-candy',s:'G-Candy'},{k:'candy-',s:'Candy−'},
+  {k:'candy',s:'Candy✦'},{k:'candy+',s:'Candy+'},{k:'c-choco',s:'C-Choco'},{k:'choco',s:'Choco'}
+];
+const C = {
+  bg:'#0e0804', panel:'rgba(42,28,14,0.6)', border:'#3a2518', line:'#2a1c0e',
+  gold:'#e8b84b', amber:'#c8923a', text:'#d4b896', sub:'#8a7060', dim:'#5a4030',
+  inputBg:'#120b04', green:'#7ab648', red:'#e11d48', blue:'#60a5fa',
+};
+
+/* ── ストレージ ── */
+const DB = {
+  KEY: 'kitasaya_cupping_sessions',
+  load(){ try{ return JSON.parse(localStorage.getItem(this.KEY)||'[]'); }catch(e){ return []; } },
+  save(s){ try{ localStorage.setItem(this.KEY, JSON.stringify(s)); return true; }catch(e){ return false; } },
+};
+
+const emptyScore = () => ({
+  fragrance:{int:7,desc:[],eval:0,acc:0},
+  flavor:{int:7,desc:[],tastes:[],eval:0,acc:0},
+  aftertaste:{int:7,desc:[],tastes:[],eval:0,acc:0},
+  acidity:{int:7,type:null,eval:0,acc:0},
+  sweetness:{int:7,where:[],dev:null,eval:0,acc:0},
+  mouthfeel:{int:7,tex:[],eval:0,acc:0},
+  overall:{eval:0},
+  defects:{under:0,over:0,baked:0,scorched:0},
+  notes:'',
+});
+
+function calcScore(s){
+  if(!s) return 0;
+  let ce=0, ac=0;
+  CATEGORIES.forEach(c=>{ ce+=(s[c.key]?.eval||0); ac+=(s[c.key]?.acc||0); });
+  ce += (s.overall?.eval||0);
+  const dt = DEFECTS.reduce((a,d)=>a+(s.defects?.[d.key]||0),0);
+  return Math.max(0, Math.round((ce+ac*3-dt)*10)/10);
+}
+function gradeOf(x){
+  if(x>=90) return {label:'★ Extraordinary',color:C.green};
+  if(x>=75) return {label:'◎ Excellent',color:C.blue};
+  if(x>=60) return {label:'○ Good',color:C.gold};
+  return {label:'△ 要改善',color:C.red};
+}
+function downloadBlob(blob, fn){
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download=fn; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+/* ── UIパーツ ── */
+function Slider({value,onChange,max=15}){
+  const pct=(value/max)*100;
+  return (
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+        <span style={{fontSize:11,color:C.sub}}>Intensity</span>
+        <span style={{fontFamily:'monospace',fontSize:14,fontWeight:700,color:C.gold}}>{value} / {max}</span>
+      </div>
+      <input type="range" min="0" max={max} value={value} onChange={e=>onChange(+e.target.value)}
+        style={{width:'100%',height:6,borderRadius:3,WebkitAppearance:'none',appearance:'none',
+          background:`linear-gradient(to right,${C.amber} ${pct}%,${C.line} ${pct}%)`}}/>
+      <style>{`input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;border-radius:50%;background:${C.gold};box-shadow:0 0 0 4px rgba(232,184,75,.2)}`}</style>
+    </div>
+  );
+}
+function Chips({items,sel,onToggle}){
+  return (
+    <div style={{display:'flex',flexWrap:'wrap',gap:7}}>
+      {items.map(it=>{ const a=sel.includes(it);
+        return <button key={it} onClick={()=>onToggle(it)}
+          style={{padding:'6px 12px',borderRadius:18,fontSize:11,fontWeight:500,
+            border:`1.5px solid ${a?C.gold:C.border}`,background:a?C.amber:'#1e1208',
+            color:a?'#1a0e04':C.sub,transition:'all .12s'}}>{it}</button>;
+      })}
+    </div>
+  );
+}
+function ScaleBtns({value,onChange,max}){
+  const arr=[]; for(let i=0;i<=max;i++) arr.push(i);
+  return (
+    <div style={{display:'grid',gridTemplateColumns:`repeat(${max+1},1fr)`,gap:4}}>
+      {arr.map(n=>{ const a=value===n;
+        const col=max===9?(n>=7?C.green:n>=4?C.amber:n===0?C.dim:C.red):C.amber;
+        return <button key={n} onClick={()=>onChange(n)}
+          style={{height:38,borderRadius:9,fontWeight:700,fontSize:13,
+            background:a?col:'#1e1208',color:a?'#fff':C.dim,
+            transform:a?'scale(1.06)':'scale(1)',transition:'all .12s'}}>{n}</button>;
+      })}
+    </div>
+  );
+}
+function Card({children,style}){ return <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:18,padding:15,marginBottom:11,...style}}>{children}</div>; }
+function Lbl({children}){ return <p style={{fontSize:10,color:C.dim,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:9}}>{children}</p>; }
+function TopBar({title,onBack}){
+  return (
+    <div style={{background:'#130c04',borderBottom:`1px solid ${C.line}`,position:'sticky',top:0,zIndex:50,display:'flex',alignItems:'center',gap:10,padding:'13px 14px'}}>
+      <button onClick={onBack} style={{fontSize:22,color:C.sub,width:28}}>‹</button>
+      <p style={{fontSize:16,fontWeight:600,color:C.text,flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{title}</p>
+    </div>
+  );
+}
+function BottomBar({children}){
+  return <div style={{position:'fixed',bottom:0,left:0,right:0,background:'#130c04',borderTop:`1px solid ${C.line}`,padding:'10px 14px 26px',display:'flex',gap:10,zIndex:50}}>{children}</div>;
+}
+const btnPrimary={flex:1,height:50,borderRadius:16,background:`linear-gradient(135deg,${C.amber},${C.gold})`,color:'#1a0e04',fontWeight:600,fontSize:15};
+const btnSecondary={flex:1,height:50,borderRadius:16,border:`1.5px solid ${C.border}`,background:'#1e1208',color:C.sub,fontWeight:500,fontSize:14};
+const expBtn={padding:'13px',borderRadius:12,background:'#1e1208',border:`1.5px solid ${C.border}`,color:C.text,fontSize:14,fontWeight:500};
+const th={padding:'7px 5px',color:C.sub,fontWeight:600,fontSize:10,borderBottom:`1px solid ${C.border}`,textAlign:'center'};
+const td={padding:'7px 5px',textAlign:'center',borderBottom:`1px solid ${C.line}`,fontFamily:'monospace'};
+
+/* ── メインApp ── */
+function App(){
+  const [view,setView]=useState('home');
+  const [sessions,setSessions]=useState(DB.load());
+  const [activeId,setActiveId]=useState(null);
+  useEffect(()=>{ DB.save(sessions); },[sessions]);
+  const active=sessions.find(s=>s.id===activeId);
+  const updateSession=(id,updater)=>setSessions(prev=>prev.map(s=>s.id===id?updater(s):s));
+  if(view==='home') return <Home {...{sessions,setView,setActiveId,setSessions}}/>;
+  if(view==='new') return <NewSession {...{setView,setSessions,setActiveId}}/>;
+  if(view==='session'&&active) return <Session {...{session:active,updateSession,setView,setSessions}}/>;
+  if(view==='aggregate'&&active) return <Aggregate {...{session:active,setView}}/>;
+  return <Home {...{sessions,setView,setActiveId,setSessions}}/>;
+}
+
+/* ── ホーム ── */
+function Home({sessions,setView,setActiveId,setSessions}){
+  const fileRef=useRef();
+  const importJSON=(e)=>{
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>{
+      try{
+        const data=JSON.parse(ev.target.result);
+        const incoming=Array.isArray(data)?data:[data];
+        setSessions(prev=>{
+          const merged=[...prev];
+          incoming.forEach(inc=>{
+            const idx=merged.findIndex(s=>s.id===inc.id);
+            if(idx>=0){
+              // 同一セッション → 評価者をマージ
+              merged[idx]={...merged[idx],evaluations:{...merged[idx].evaluations,...inc.evaluations}};
+            } else merged.push(inc);
+          });
+          return merged;
+        });
+        alert('✅ インポート完了（同一セッションは評価者をマージしました）');
+      }catch(err){ alert('❌ 読み込み失敗'); }
+    };
+    reader.readAsText(file); e.target.value='';
+  };
+  return (
+    <div style={{minHeight:'100dvh',background:C.bg,paddingBottom:40}}>
+      <div style={{padding:'24px 18px 16px'}}>
+        <p style={{fontSize:9,color:C.dim,textTransform:'uppercase',letterSpacing:'.18em'}}>Kitasaya Roastery</p>
+        <h1 className="serif" style={{fontSize:30,color:C.text,lineHeight:1.1,marginTop:2}}>Cupping Sessions</h1>
+        <p style={{fontSize:12,color:C.sub,marginTop:4}}>WCRC Production Cupping 準拠</p>
+      </div>
+      <div style={{padding:'0 18px'}}>
+        <button onClick={()=>setView('new')} style={{width:'100%',padding:16,borderRadius:16,background:`linear-gradient(135deg,${C.amber},${C.gold})`,color:'#1a0e04',fontWeight:600,fontSize:15,marginBottom:10}}>＋ 新しいカッピングセッション</button>
+        <button onClick={()=>fileRef.current.click()} style={{width:'100%',padding:14,borderRadius:16,border:`1.5px solid ${C.border}`,background:'transparent',color:C.sub,fontWeight:500,fontSize:14,marginBottom:24}}>📥 JSONをインポート（他の人の回答を取込）</button>
+        <input ref={fileRef} type="file" accept=".json" onChange={importJSON} style={{display:'none'}}/>
+        {sessions.length===0?(
+          <div style={{textAlign:'center',padding:'40px 20px',color:C.dim}}>
+            <p style={{fontSize:40,marginBottom:10}}>☕</p>
+            <p style={{fontSize:13}}>まだセッションがありません</p>
+          </div>
+        ):(
+          <div>
+            <Lbl>保存済みセッション（{sessions.length}）</Lbl>
+            {sessions.slice().reverse().map(s=>{
+              const evalCount=Object.keys(s.evaluations||{}).length;
+              return (
+                <button key={s.id} onClick={()=>{setActiveId(s.id);setView('session');}}
+                  style={{width:'100%',textAlign:'left',background:C.panel,border:`1px solid ${C.border}`,borderRadius:16,padding:15,marginBottom:9}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                    <div>
+                      <p style={{fontSize:15,fontWeight:600,color:C.text}}>{s.name||'無題'}</p>
+                      <p style={{fontSize:11,color:C.sub,marginTop:3}}>{s.date} · {s.cups.length}カップ · {evalCount}名入力</p>
+                    </div>
+                    <span style={{fontSize:18,color:C.dim}}>›</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── 新規セッション ── */
+function NewSession({setView,setSessions,setActiveId}){
+  const [name,setName]=useState('');
+  const [date,setDate]=useState(new Date().toISOString().split('T')[0]);
+  const [numCups,setNumCups]=useState(6);
+  const [cups,setCups]=useState(Array.from({length:6},(_,i)=>({id:'c'+i,label:''})));
+  const setCount=(n)=>{
+    n=Math.max(3,Math.min(25,n)); setNumCups(n);
+    setCups(prev=>{ const arr=[...prev];
+      while(arr.length<n) arr.push({id:'c'+arr.length+'_'+Date.now()+Math.random().toString(36).slice(2,5),label:''});
+      return arr.slice(0,n);
+    });
+  };
+  const create=()=>{
+    const session={ id:'S'+Date.now(), name:name||('Session '+date), date,
+      cups:cups.map((c,i)=>({id:c.id,label:c.label||('Sample '+(i+1))})),
+      evaluations:{}, createdAt:new Date().toISOString() };
+    setSessions(prev=>[...prev,session]); setActiveId(session.id); setView('session');
+  };
+  return (
+    <div style={{minHeight:'100dvh',background:C.bg,paddingBottom:120}}>
+      <TopBar title="新しいセッション" onBack={()=>setView('home')}/>
+      <div style={{padding:'14px 16px'}} className="fade">
+        <Card>
+          <Lbl>セッション情報</Lbl>
+          <div style={{marginBottom:12}}>
+            <span style={{fontSize:11,color:C.sub,display:'block',marginBottom:5}}>セッション名</span>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="例: 6/4 エチオピア比較会"/>
+          </div>
+          <div>
+            <span style={{fontSize:11,color:C.sub,display:'block',marginBottom:5}}>開催日</span>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)}/>
+          </div>
+        </Card>
+        <Card>
+          <Lbl>カップ数（3〜25）</Lbl>
+          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
+            <button onClick={()=>setCount(numCups-1)} style={{width:44,height:44,borderRadius:12,background:'#1e1208',color:C.gold,fontSize:22,fontWeight:700,border:`1.5px solid ${C.border}`}}>−</button>
+            <span style={{flex:1,textAlign:'center',fontSize:28,fontWeight:700,color:C.gold,fontFamily:'monospace'}}>{numCups}</span>
+            <button onClick={()=>setCount(numCups+1)} style={{width:44,height:44,borderRadius:12,background:'#1e1208',color:C.gold,fontSize:22,fontWeight:700,border:`1.5px solid ${C.border}`}}>＋</button>
+          </div>
+          <Lbl>サンプル名（任意）</Lbl>
+          {cups.map((c,i)=>(
+            <div key={c.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:7}}>
+              <span style={{width:30,fontSize:12,color:C.dim,textAlign:'center',fontFamily:'monospace'}}>{i+1}</span>
+              <input value={c.label} placeholder={'Sample '+(i+1)} onChange={e=>setCups(prev=>prev.map((x,j)=>j===i?{...x,label:e.target.value}:x))}/>
+            </div>
+          ))}
+        </Card>
+      </div>
+      <BottomBar>
+        <button onClick={()=>setView('home')} style={btnSecondary}>キャンセル</button>
+        <button onClick={create} style={{...btnPrimary,flex:2}}>作成 →</button>
+      </BottomBar>
+    </div>
+  );
+}
+
+/* ── セッション（評価者選択）── */
+function Session({session,updateSession,setView,setSessions}){
+  const [evaluator,setEvaluator]=useState(null);
+  const [newName,setNewName]=useState('');
+  const evaluators=Object.keys(session.evaluations||{});
+  const addEvaluator=()=>{
+    const nm=newName.trim(); if(!nm) return;
+    if(session.evaluations[nm]){ setEvaluator(nm); return; }
+    updateSession(session.id,s=>({...s,evaluations:{...s.evaluations,[nm]:{}}}));
+    setEvaluator(nm); setNewName('');
+  };
+  const exportSession=()=>{
+    downloadBlob(new Blob([JSON.stringify(session,null,2)],{type:'application/json'}),(session.name||'session').replace(/[^\w]/g,'_')+'.json');
+  };
+  const exportMyJSON=()=>{
+    const single={...session,evaluations:{[evaluator]:session.evaluations[evaluator]}};
+    downloadBlob(new Blob([JSON.stringify(single,null,2)],{type:'application/json'}),(session.name||'session').replace(/[^\w]/g,'_')+'_'+evaluator+'.json');
+  };
+  if(!evaluator){
+    return (
+      <div style={{minHeight:'100dvh',background:C.bg,paddingBottom:120}}>
+        <TopBar title={session.name} onBack={()=>setView('home')}/>
+        <div style={{padding:'14px 16px'}} className="fade">
+          <p style={{fontSize:12,color:C.sub,marginBottom:16}}>{session.date} · {session.cups.length}カップ</p>
+          <Card>
+            <Lbl>評価者を選択 / 追加</Lbl>
+            {evaluators.length===0&&<p style={{fontSize:12,color:C.dim,marginBottom:12}}>名前を追加して開始してください</p>}
+            {evaluators.map(nm=>{
+              const done=Object.keys(session.evaluations[nm]||{}).length;
+              return (
+                <button key={nm} onClick={()=>setEvaluator(nm)} style={{width:'100%',textAlign:'left',background:'#1e1208',border:`1.5px solid ${C.border}`,borderRadius:12,padding:'13px 15px',marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontSize:15,color:C.text,fontWeight:500}}>{nm}</span>
+                  <span style={{fontSize:11,color:C.sub}}>{done}/{session.cups.length} 入力済</span>
+                </button>
+              );
+            })}
+            <div style={{display:'flex',gap:8,marginTop:12}}>
+              <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="評価者名" onKeyDown={e=>{if(e.key==='Enter')addEvaluator();}}/>
+              <button onClick={addEvaluator} style={{width:80,borderRadius:12,background:`linear-gradient(135deg,${C.amber},${C.gold})`,color:'#1a0e04',fontWeight:600,fontSize:14}}>追加</button>
+            </div>
+          </Card>
+          {evaluators.length>0&&(
+            <Card>
+              <Lbl>セッション全体</Lbl>
+              <button onClick={()=>setView('aggregate')} style={{width:'100%',padding:14,borderRadius:12,background:`linear-gradient(135deg,${C.amber},${C.gold})`,color:'#1a0e04',fontWeight:600,fontSize:14,marginBottom:8}}>📊 全員の結果をまとめて見る</button>
+              <button onClick={exportSession} style={{width:'100%',padding:13,borderRadius:12,border:`1.5px solid ${C.border}`,background:'transparent',color:C.sub,fontSize:13}}>💾 セッション全体をJSON保存</button>
+            </Card>
+          )}
+          <button onClick={()=>{ if(confirm('このセッションを削除しますか?')){ setSessions(prev=>prev.filter(s=>s.id!==session.id)); setView('home'); } }} style={{width:'100%',padding:12,color:C.red,fontSize:12,marginTop:8}}>セッションを削除</button>
+        </div>
+      </div>
+    );
+  }
+  return <CupEvaluation {...{session,evaluator,updateSession,setEvaluator,exportMyJSON}}/>;
+}
+
+/* ── カップ評価 ── */
+function CupEvaluation({session,evaluator,updateSession,setEvaluator,exportMyJSON}){
+  const [cupIdx,setCupIdx]=useState(0);
+  const cup=session.cups[cupIdx];
+  const myEvals=session.evaluations[evaluator]||{};
+  const score=myEvals[cup.id]||emptyScore();
+  const update=(updater)=>{
+    updateSession(session.id,s=>{
+      const ev={...(s.evaluations[evaluator]||{})};
+      ev[cup.id]=updater(ev[cup.id]||emptyScore());
+      return {...s,evaluations:{...s.evaluations,[evaluator]:ev}};
+    });
+  };
+  const setCat=(k,f,v)=>update(sc=>({...sc,[k]:{...sc[k],[f]:v}}));
+  const toggleArr=(k,f,item)=>update(sc=>{
+    const arr=sc[k][f]||[]; const next=arr.includes(item)?arr.filter(x=>x!==item):[...arr,item];
+    return {...sc,[k]:{...sc[k],[f]:next}};
+  });
+  const liveScore=calcScore(score); const grade=gradeOf(liveScore);
+  return (
+    <div style={{minHeight:'100dvh',background:C.bg,paddingBottom:120}}>
+      <div style={{background:'#130c04',borderBottom:`1px solid ${C.line}`,position:'sticky',top:0,zIndex:50}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 14px'}}>
+          <button onClick={()=>setEvaluator(null)} style={{fontSize:13,color:C.sub}}>‹ {evaluator}</button>
+          <div style={{textAlign:'center'}}>
+            <p style={{fontSize:10,color:C.dim}}>WCRC Score</p>
+            <p style={{fontSize:18,fontWeight:700,color:grade.color,fontFamily:'monospace',lineHeight:1}}>{liveScore}<span style={{fontSize:11,color:C.dim}}> /117</span></p>
+          </div>
+          <button onClick={exportMyJSON} style={{fontSize:12,color:C.gold}}>💾 保存</button>
+        </div>
+        <div style={{display:'flex',gap:6,padding:'2px 12px 10px',overflowX:'auto'}}>
+          {session.cups.map((c,i)=>{ const done=!!myEvals[c.id]; const act=i===cupIdx;
+            return <button key={c.id} onClick={()=>setCupIdx(i)} style={{padding:'6px 13px',borderRadius:16,whiteSpace:'nowrap',fontSize:12,flexShrink:0,background:act?C.amber:done?'#1e3a1e':'#1e1208',color:act?'#1a0e04':done?C.green:C.sub,fontWeight:act?600:400,border:`1px solid ${act?C.gold:done?'#2a4a2a':C.line}`}}>{done?'✓ ':''}{c.label}</button>;
+          })}
+        </div>
+      </div>
+      <div style={{padding:'14px 14px 0'}} className="fade" key={cup.id}>
+        <p style={{fontSize:11,color:C.dim,marginBottom:12}}>Cup {cupIdx+1}/{session.cups.length} — {cup.label}</p>
+        <Card style={{borderColor:'#7f1d1d'}}>
+          <Lbl>① Roast Defects（最初に評価・減点）</Lbl>
+          {DEFECTS.map(d=>(
+            <div key={d.key} style={{marginBottom:11}}>
+              <p style={{fontSize:12,color:'#fca5a5',marginBottom:5}}>{d.label}</p>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:5}}>
+                {DEFECT_SCALE.map(n=>{ const a=score.defects[d.key]===n;
+                  return <button key={n} onClick={()=>update(sc=>({...sc,defects:{...sc.defects,[d.key]:n}}))} style={{height:36,borderRadius:9,fontWeight:700,fontSize:13,background:a?'#991b1b':'#1e1208',color:a?'#fff':C.dim}}>{n}</button>;
+                })}
+              </div>
+            </div>
+          ))}
+          <p style={{fontSize:10,color:C.dim,marginTop:4}}>0=なし / 1=わずか / 3=明確 / 5=圧倒的</p>
+        </Card>
+        {CATEGORIES.map(cat=>(
+          <Card key={cat.key}>
+            <Lbl>{cat.label}</Lbl>
+            <Slider value={score[cat.key].int} onChange={v=>setCat(cat.key,'int',v)}/>
+            {(cat.key==='fragrance'||cat.key==='flavor'||cat.key==='aftertaste')&&(
+              <div style={{marginTop:12}}><p style={{fontSize:10,color:C.dim,marginBottom:6}}>Descriptors</p>
+                <Chips items={DESCRIPTORS} sel={score[cat.key].desc} onToggle={it=>toggleArr(cat.key,'desc',it)}/></div>
+            )}
+            {(cat.key==='flavor'||cat.key==='aftertaste')&&(
+              <div style={{marginTop:10}}><p style={{fontSize:10,color:C.dim,marginBottom:6}}>Main Tastes (up to 2)</p>
+                <Chips items={MAIN_TASTES} sel={score[cat.key].tastes} onToggle={it=>toggleArr(cat.key,'tastes',it)}/></div>
+            )}
+            {cat.key==='acidity'&&(
+              <div style={{marginTop:12}}><p style={{fontSize:10,color:C.dim,marginBottom:6}}>Type (select 1)</p>
+                {ACIDITY_TYPE.map(t=>(<button key={t} onClick={()=>setCat('acidity','type',t)} style={{display:'block',width:'100%',textAlign:'left',padding:'9px 12px',borderRadius:10,marginBottom:6,fontSize:12,background:score.acidity.type===t?C.amber:'#1e1208',color:score.acidity.type===t?'#1a0e04':C.sub,border:`1.5px solid ${score.acidity.type===t?C.gold:C.border}`}}>{t}</button>))}</div>
+            )}
+            {cat.key==='sweetness'&&(
+              <div style={{marginTop:12}}>
+                <p style={{fontSize:10,color:C.dim,marginBottom:6}}>Where (select all)</p>
+                <Chips items={['Fragrance/Aroma','Flavor','Aftertaste']} sel={score.sweetness.where} onToggle={it=>toggleArr('sweetness','where',it)}/>
+                <p style={{fontSize:10,color:C.dim,margin:'10px 0 6px'}}>Development</p>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:4}}>
+                  {SWEETNESS_DEV.map(sd=>{ const a=score.sweetness.dev===sd.k; const t=sd.k==='candy';
+                    return <button key={sd.k} onClick={()=>setCat('sweetness','dev',sd.k)} style={{height:40,borderRadius:9,fontSize:9,fontWeight:700,background:a?(t?C.green:C.amber):'#1e1208',color:a?'#fff':t?C.green:C.dim,border:!a&&t?`1px solid ${C.green}`:'none'}}>{sd.s}</button>;
+                  })}
+                </div>
+              </div>
+            )}
+            {cat.key==='mouthfeel'&&(
+              <div style={{marginTop:12}}><p style={{fontSize:10,color:C.dim,marginBottom:6}}>Texture (up to 2)</p>
+                <Chips items={MOUTHFEEL_TEX} sel={score.mouthfeel.tex} onToggle={it=>toggleArr('mouthfeel','tex',it)}/></div>
+            )}
+            <div style={{marginTop:14}}><p style={{fontSize:10,color:C.dim,marginBottom:6}}>Coffee Evaluation (0–9)</p>
+              <ScaleBtns value={score[cat.key].eval} onChange={v=>setCat(cat.key,'eval',v)} max={9}/></div>
+            <div style={{marginTop:10}}><p style={{fontSize:10,color:C.dim,marginBottom:6}}>Accuracy (0–3) ×3</p>
+              <ScaleBtns value={score[cat.key].acc} onChange={v=>setCat(cat.key,'acc',v)} max={3}/></div>
+          </Card>
+        ))}
+        <Card style={{borderColor:'#1a1a3a'}}>
+          <Lbl>Overall（Coffee Evaluation のみ）</Lbl>
+          <ScaleBtns value={score.overall.eval} onChange={v=>update(sc=>({...sc,overall:{eval:v}}))} max={9}/>
+        </Card>
+        <Card>
+          <Lbl>このカップのメモ</Lbl>
+          <textarea value={score.notes} onChange={e=>update(sc=>({...sc,notes:e.target.value}))} placeholder="特徴・印象・気づき..." style={{height:70}}/>
+        </Card>
+      </div>
+      <BottomBar>
+        <button onClick={()=>setCupIdx(Math.max(0,cupIdx-1))} disabled={cupIdx===0} style={{...btnSecondary,opacity:cupIdx===0?.3:1}}>← 前</button>
+        <button onClick={()=>{ if(cupIdx<session.cups.length-1) setCupIdx(cupIdx+1); else setEvaluator(null); }} style={{...btnPrimary,flex:2}}>{cupIdx<session.cups.length-1?'次のカップ →':'評価を完了 ✓'}</button>
+      </BottomBar>
+    </div>
+  );
+}
+
+/* ── 集約 ── */
+function Aggregate({session,setView}){
+  const reportRef=useRef();
+  const evaluators=Object.keys(session.evaluations||{});
+  const cupStats=session.cups.map(cup=>{
+    const scores=evaluators.map(ev=>session.evaluations[ev][cup.id]).filter(Boolean);
+    const totals=scores.map(calcScore);
+    const avg=totals.length?totals.reduce((a,b)=>a+b,0)/totals.length:0;
+    const catAvg={};
+    CATEGORIES.forEach(c=>{ const v=scores.map(s=>s[c.key]?.eval||0); catAvg[c.key]=v.length?v.reduce((a,b)=>a+b,0)/v.length:0; });
+    const ov=scores.map(s=>s.overall?.eval||0); catAvg.overall=ov.length?ov.reduce((a,b)=>a+b,0)/ov.length:0;
+    return { cup,count:scores.length,avg:Math.round(avg*10)/10,catAvg,
+      min:totals.length?Math.min(...totals):0,max:totals.length?Math.max(...totals):0,
+      individual:evaluators.map(ev=>({ev,score:session.evaluations[ev][cup.id]?calcScore(session.evaluations[ev][cup.id]):null})) };
+  });
+  const ranked=[...cupStats].sort((a,b)=>b.avg-a.avg);
+  const exportCSV=()=>{
+    let rows=[['Cup','Evaluator','WCRC_Total','Frag','Flavor','Aftertaste','Acidity','Sweetness','Mouthfeel','Overall','Defects','Notes']];
+    session.cups.forEach(cup=>evaluators.forEach(ev=>{
+      const s=session.evaluations[ev][cup.id]; if(!s) return;
+      const defT=DEFECTS.reduce((a,d)=>a+(s.defects[d.key]||0),0);
+      rows.push([cup.label,ev,calcScore(s),s.fragrance.eval,s.flavor.eval,s.aftertaste.eval,s.acidity.eval,s.sweetness.eval,s.mouthfeel.eval,s.overall.eval,defT,(s.notes||'').replace(/[\n,]/g,' ')]);
+    }));
+    const csv='\uFEFF'+rows.map(r=>r.map(c=>`"${c}"`).join(',')).join('\n');
+    downloadBlob(new Blob([csv],{type:'text/csv'}),(session.name||'session')+'_results.csv');
+  };
+  const exportJSON=()=>downloadBlob(new Blob([JSON.stringify(session,null,2)],{type:'application/json'}),(session.name||'session').replace(/[^\w]/g,'_')+'_full.json');
+  const exportImage=async()=>{
+    try{ const cv=await html2canvas(reportRef.current,{backgroundColor:'#0e0804',scale:2}); cv.toBlob(b=>downloadBlob(b,(session.name||'session')+'_report.png')); }catch(e){ alert('画像生成失敗'); }
+  };
+  const exportPDF=async()=>{
+    try{
+      const cv=await html2canvas(reportRef.current,{backgroundColor:'#0e0804',scale:2});
+      const img=cv.toDataURL('image/png'); const {jsPDF}=window.jspdf; const pdf=new jsPDF('p','mm','a4');
+      const w=210,h=cv.height*w/cv.width; let pos=0,left=h;
+      pdf.addImage(img,'PNG',0,0,w,h); left-=297;
+      while(left>0){ pos-=297; pdf.addPage(); pdf.addImage(img,'PNG',0,pos,w,h); left-=297; }
+      pdf.save((session.name||'session')+'_report.pdf');
+    }catch(e){ alert('PDF生成失敗: '+e.message); }
+  };
+  return (
+    <div style={{minHeight:'100dvh',background:C.bg,paddingBottom:120}}>
+      <TopBar title="結果まとめ" onBack={()=>setView('session')}/>
+      <div style={{padding:'14px 14px 0'}} className="fade">
+        <Card>
+          <Lbl>エクスポート</Lbl>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            <button onClick={exportCSV} style={expBtn}>📊 CSV</button>
+            <button onClick={exportJSON} style={expBtn}>🗂 JSON</button>
+            <button onClick={exportImage} style={expBtn}>🖼 画像</button>
+            <button onClick={exportPDF} style={expBtn}>📄 PDF</button>
+          </div>
+        </Card>
+        <div ref={reportRef} style={{background:C.bg,padding:'4px 0'}}>
+          <div style={{padding:'8px 4px 16px'}}>
+            <p className="serif" style={{fontSize:22,color:C.text}}>{session.name}</p>
+            <p style={{fontSize:11,color:C.sub}}>{session.date} · {session.cups.length}カップ · 評価者{evaluators.length}名（{evaluators.join(', ')}）</p>
+          </div>
+          <Card>
+            <Lbl>WCRC スコアランキング（全員平均）</Lbl>
+            {ranked.map((st,i)=>{ const g=gradeOf(st.avg);
+              return (
+                <div key={st.cup.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 0',borderBottom:i<ranked.length-1?`1px solid ${C.line}`:'none'}}>
+                  <span style={{width:24,fontSize:14,fontWeight:700,color:i===0?C.gold:C.dim,textAlign:'center'}}>{i+1}</span>
+                  <div style={{flex:1}}>
+                    <p style={{fontSize:14,color:C.text,fontWeight:500}}>{st.cup.label}</p>
+                    <p style={{fontSize:10,color:C.dim}}>{st.count}名評価 · 範囲 {st.min}–{st.max}</p>
+                  </div>
+                  <div style={{textAlign:'right'}}>
+                    <p style={{fontSize:18,fontWeight:700,color:g.color,fontFamily:'monospace',lineHeight:1}}>{st.avg}</p>
+                    <p style={{fontSize:9,color:g.color}}>{g.label}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </Card>
+          <Card>
+            <Lbl>カテゴリ別 平均 Coffee Eval（0–9）</Lbl>
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+                <thead><tr><th style={{...th,textAlign:'left'}}>Cup</th>{CATEGORIES.map(c=><th key={c.key} style={th}>{c.label.slice(0,4)}</th>)}<th style={th}>Ov</th></tr></thead>
+                <tbody>{cupStats.map(st=>(
+                  <tr key={st.cup.id}>
+                    <td style={{...td,textAlign:'left',color:C.text,maxWidth:90,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{st.cup.label}</td>
+                    {CATEGORIES.map(c=>{ const v=st.catAvg[c.key]; return <td key={c.key} style={{...td,color:v>=7?C.green:v>=4?C.gold:C.dim}}>{v?v.toFixed(1):'–'}</td>; })}
+                    <td style={{...td,color:C.blue}}>{st.catAvg.overall?st.catAvg.overall.toFixed(1):'–'}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </Card>
+          <Card>
+            <Lbl>評価者別スコア（WCRC Total）</Lbl>
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+                <thead><tr><th style={{...th,textAlign:'left'}}>Cup</th>{evaluators.map(ev=><th key={ev} style={th}>{ev.slice(0,6)}</th>)}<th style={th}>平均</th></tr></thead>
+                <tbody>{cupStats.map(st=>(
+                  <tr key={st.cup.id}>
+                    <td style={{...td,textAlign:'left',color:C.text,maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{st.cup.label}</td>
+                    {st.individual.map(ind=>(<td key={ind.ev} style={{...td,color:ind.score!=null?C.text:C.dim}}>{ind.score!=null?ind.score:'–'}</td>))}
+                    <td style={{...td,color:C.gold,fontWeight:700}}>{st.avg}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      </div>
+      <BottomBar><button onClick={()=>setView('session')} style={{...btnPrimary,flex:1}}>セッションに戻る</button></BottomBar>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+<script>
+if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{})); }
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "WCRC Cupping — Kitasaya Roastery",
+  "short_name": "Cupping",
+  "description": "WCRCプロダクションカッピング評価アプリ（複数カップ・複数評価者対応）",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e0804",
+  "theme_color": "#0e0804",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
